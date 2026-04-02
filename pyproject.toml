@@ -1,24 +1,24 @@
 [build-system]
-requires = ["setuptools>=68"]
-build-backend = "setuptools.backends.legacy:build"
+requires = ["setuptools>=45", "wheel"]
+build-backend = "setuptools.build_meta"
 
 [project]
 name = "code-review-env"
 version = "1.0.0"
 description = "OpenEnv environment for AI pull request code review evaluation"
-readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "fastapi",
-    "uvicorn",
-    "pydantic>=2.0",
+    "openenv-core[core]>=0.2.2",
+    "fastapi>=0.115.0",
+    "pydantic>=2.0.0",
+    "uvicorn>=0.24.0",
     "openai>=1.0",
-    "openenv-core>=0.2.0",
 ]
 
 [project.scripts]
-serve = "server.app:main"
+server = "code_review_env.server.app:main"
 
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["env*", "server*"]
+[tool.setuptools]
+include-package-data = true
+packages = ["code_review_env", "code_review_env.server"]
+package-dir = { "code_review_env" = ".", "code_review_env.server" = "server" }
