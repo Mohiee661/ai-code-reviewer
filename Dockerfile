@@ -10,4 +10,5 @@ COPY . .
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-CMD ["uvicorn", "inference:app", "--host", "0.0.0.0", "--port", "8000"]
+# Serve the OpenEnv HTTP API on port 8000
+CMD ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
