@@ -1,31 +1,87 @@
 """
 FastAPI application for the Code Review Environment.
-
-Usage:
-    uvicorn server.app:app --host 0.0.0.0 --port 7860
-    uv run --project . server
 """
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from openenv.core.env_server.http_server import create_app
-from openenv.core.env_server.types import Action, Observation
+from fastapi import FastAPI
+from fastapi.responses import HTMLResponse
+from pydantic import BaseModel
+from typing import Any
 
+# Import our existing environment
 try:
-    from code_review_env.server.code_review_environment import CodeReviewEnvironment
+    from env.environment import CodeReviewEnv
+    from env.models import Action as ReviewAction
 except ImportError:
-    from server.code_review_environment import CodeReviewEnvironment
+    import sys
+    sys.path.insert(0, "/app")
+    from env.environment import CodeReviewEnv
+    from env.models import Action as ReviewAction
 
-app = create_app(
-    CodeReviewEnvironment,
-    Action,
-    Observation,
-    env_name="code_review_env",
+app = FastAPI(
+    title="AI Code Reviewer",
+    description="OpenEnv environment for PR code review",
+    version="1.0.0",
 )
+env = CodeReviewEnv()
+
+
+class ActionRequest(BaseModel):
+    issues: list[Any] = []
+    final_decision: str = "approve"
+
+
+@app.get("/", response_class=HTMLResponse)
+def root():
+    return """
+    <html><head><title>AI Code Reviewer</title></head>
+    <body style="font-family:sans-serif;max-width:600px;margin:40px auto;padding:20px">
+    <h1>🤖 AI Code Reviewer</h1>
+    <p>OpenEnv environment for pull request review evaluation.</p>
+    <h3>Endpoints</h3>
+    <ul>
+      <li><code>POST /reset</code> — start a new episode</li>
+      <li><code>POST /step</code> — submit a review action</li>
+      <li><code>GET /state</code> — inspect current task</li>
+      <li><a href="/docs">GET /docs</a> — interactive API docs</li>
+    </ul>
+    <p><a href="/docs"><button style="padding:10px 20px;font-size:16px;cursor:pointer">Open API Docs →</button></a></p>
+    </body></html>
+    """
+
+
+@app.get("/health")
+def health():
+    return {"status": "ok"}
+
+
+@app.post("/reset")
+def reset():
+    obs = env.reset()
+    return obs.model_dump()
+
+
+@app.post("/step")
+def step(action_req: ActionRequest):
+    action = ReviewAction(**action_req.model_dump())
+    obs, reward, done, info = env.step(action)
+    return {
+        "observation": obs.model_dump(),
+        "reward": reward.model_dump(),
+        "done": done,
+        "info": info,
+    }
+
+
+@app.get("/state")
+def state():
+    return env.state()
 
 
 def main():
+    """Entry point for uv run server or python -m server.app"""
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=7860)
 
