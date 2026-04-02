@@ -3,28 +3,23 @@ title: AI Code Reviewer
 emoji: 🤖
 colorFrom: blue
 colorTo: purple
-sdk: gradio
-python_version: "3.10"
-app_file: app.py
+sdk: docker
 pinned: false
 ---
 
 # AI Code Reviewer
 
-An OpenEnv environment that evaluates an AI agent's ability to review pull requests.
-The agent observes a code diff, identifies issues, and decides whether to approve or request changes.
-Performance is scored deterministically using a severity-weighted grader.
+An OpenEnv environment that evaluates an AI agent ability to review pull requests.
+
+## API Endpoints
+
+- `POST /reset` — load a new PR task, returns observation
+- `POST /step` — submit a review action, returns score and feedback  
+- `GET /state` — inspect current task (debug)
+- `GET /docs` — Swagger UI
 
 ## Tasks
 
-- **easy** — off-by-one logic bugs, single file
-- **medium** — inefficient DB queries in a Flask API
-- **hard** — SQL injection + hardcoded JWT secret across two files
-
-## Setup
-
-```bash
-pip install -r requirements.txt
-export OPENAI_API_KEY=sk-...
-python baseline.py
-```
+- easy — off-by-one logic bugs, single file
+- medium — inefficient DB queries in a Flask API
+- hard — SQL injection + hardcoded JWT secret across two files
