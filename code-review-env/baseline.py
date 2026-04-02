@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 from openai import OpenAI
 from env.environment import CodeReviewEnv
@@ -47,25 +47,35 @@ def parse_action(raw: str) -> Action:
 
 
 def main():
-    client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
-    env = CodeReviewEnv()
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
+        print("[warn] No OPENAI_API_KEY found. Running dummy baseline.")
+        use_api = False
+    else:
+        print("[info] Using OpenAI API")
+        client = OpenAI(api_key=api_key)
+        use_api = True
 
+    env = CodeReviewEnv()
     observation = env.reset()
     print(f"[info] Task: {env.state()['task_id']}\n")
 
-    response = client.chat.completions.create(
-        model="gpt-4o",
-        messages=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": build_user_prompt(observation)},
-        ],
-        temperature=0,
-    )
+    if use_api:
+        response = client.chat.completions.create(
+            model="gpt-4o",
+            messages=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": build_user_prompt(observation)},
+            ],
+            temperature=0,
+        )
+        raw = response.choices[0].message.content
+        print(f"[model output]\n{raw}\n")
+        action = parse_action(raw)
+    else:
+        print("[info] Dummy action: no issues, decision=approve\n")
+        action = Action(issues=[], final_decision="approve")
 
-    raw = response.choices[0].message.content
-    print(f"[model output]\n{raw}\n")
-
-    action = parse_action(raw)
     _, reward, done, info = env.step(action)
 
     print(f"[result] task_id : {info['task_id']}")
