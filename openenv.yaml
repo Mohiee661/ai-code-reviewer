@@ -1,0 +1,13 @@
+name: code-review-env
+description: >
+  A pull request review environment where an agent observes code diffs,
+  identifies issues, and decides whether to approve or request changes.
+  Scored deterministically by a severity-weighted grader.
+version: "1.0.0"
+tasks:
+  - id: easy
+    description: Off-by-one logic bugs in a single utility file.
+  - id: medium
+    description: Inefficient database queries and missing pagination in a Flask API.
+  - id: hard
+    description: SQL injection and hardcoded JWT secret spanning two files (multi-file reasoning required).
