@@ -1,4 +1,4 @@
-﻿[build-system]
+[build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.backends.legacy:build"
 
@@ -14,9 +14,6 @@ dependencies = [
     "pydantic>=2.0",
     "openai>=1.0",
 ]
-
-[project.optional-dependencies]
-dev = ["pytest"]
 
 [tool.setuptools.packages.find]
 where = ["."]
