@@ -9,67 +9,79 @@ pinned: false
 
 # AI Code Reviewer — OpenEnv Environment v2.0
 
-A real-world OpenEnv environment where an AI agent reviews pull requests,
+A production-ready OpenEnv environment where an AI agent reviews pull requests,
 identifies bugs and security issues, and decides whether to approve or request changes.
 
-## What's New in v2.0
+## API Contract
 
-- **Reviewer Persona Mode** — each task assigns a static persona (security, performance, pragmatic) embedded in the observation instruction, nudging the agent toward the right focus.
-- **Multi-step evaluation** — episodes run in two phases: phase 1 submits issues, phase 2 submits the final decision. Enables richer agent reasoning and cleaner separation of concerns.
-- **Severity-aware grading** — missing a high-severity issue now carries a −0.5 penalty; catching all high-severity issues earns a +0.1 bonus; high-severity false positives are penalised at −0.25 vs −0.1 for normal ones.
-- **Precision & recall metrics** — feedback now includes per-episode precision and recall.
-- **Expert task** — a new cross-file task where missing input validation in the API layer is exploited by a raw SQL query in the DB layer.
+All endpoints return a consistent envelope:
 
-## Architecture
-
+```json
+{ "success": true,  "data": { ... }, "error": null }
+{ "success": false, "data": null,    "error": "message" }
 ```
-Agent (LLM)
-    ↓  Phase 1: Action { issues[] }
-    ↓  Phase 2: Action { final_decision }
-Environment (CodeReviewEnv)
-    ↓  grade(issues + decision, expected, correct_decision)
-Grader (severity-weighted, deterministic)
-    ↓  Reward { score: 0.0–1.0, feedback: str }
-```
-
-## API Endpoints
 
 | Method | Path | Description |
 |--------|------|-------------|
 | POST | /reset | Start episode. Optional body: `{"task_id": "easy"}` |
 | POST | /step | Phase 1: submit `issues`. Phase 2: submit `final_decision`. |
-| GET  | /state | Inspect task, phase, pending issues |
+| GET  | /state | Current task, phase, pending issues |
+| GET  | /metrics | Last episode precision / recall / hallucination rate |
+| GET  | /health | Liveness check |
 | GET  | /docs | Swagger UI |
 
 ## Two-Phase Flow
 
 ```
-POST /reset  →  obs (phase="issues")
-POST /step   { "issues": [...] }  →  reward.score=0.0, done=false, phase="decision"
-POST /step   { "final_decision": "request_changes" }  →  final reward, done=true
+POST /reset                              →  obs { phase: "issues" }
+POST /step  { "issues": [...] }          →  reward.score=0.0, done=false
+POST /step  { "final_decision": "..." }  →  final reward, done=true
 ```
 
 ## Observation
 
 ```json
 {
-  "files": [{ "filename": "auth/login.py", "diff": "..." }],
+  "files":       [{ "filename": "auth/login.py", "diff": "..." }],
   "instruction": "You are a strict senior security reviewer. Review this pull request...",
-  "persona": "You are a strict senior security reviewer.",
-  "phase": "issues"
+  "persona":     "You are a strict senior security reviewer.",
+  "phase":       "issues"
 }
 ```
 
 ## Action
 
-Phase 1 (issues only):
+Phase 1 — issues only:
 ```json
-{ "issues": [{ "file": "auth/login.py", "line": 11, "type": "security", "severity": "high", "description": "..." }] }
+{
+  "issues": [{
+    "file": "auth/login.py", "line": 11,
+    "type": "security", "severity": "high",
+    "description": "SQL injection via f-string interpolation."
+  }]
+}
 ```
 
-Phase 2 (decision only):
+Phase 2 — decision only:
 ```json
 { "final_decision": "request_changes" }
+```
+
+## Failure Handling
+
+Invalid payloads return HTTP 422 with a structured error:
+```json
+{ "success": false, "data": null, "error": "issues[0] missing required field 'severity'" }
+```
+
+Calling `/step` before `/reset` returns HTTP 400:
+```json
+{ "success": false, "data": null, "error": "Call reset() before step()." }
+```
+
+Unknown `task_id` in `/reset` returns HTTP 400:
+```json
+{ "success": false, "data": null, "error": "Unknown task_id: 'foo'" }
 ```
 
 ## Reward Design
@@ -79,30 +91,57 @@ Phase 2 (decision only):
 | Matched issue (high) | +1.0 toward base |
 | Matched issue (medium) | +0.5 toward base |
 | Matched issue (low) | +0.2 toward base |
-| Missed high-severity issue | −0.5 each |
+| Missed high-severity | −0.5 each |
 | All high-severity found | +0.1 bonus |
 | False positive (normal) | −0.1 each |
 | False positive (high severity) | −0.25 each |
-| Correct final decision | +0.2 |
-| Wrong final decision | −0.2 |
+| Correct decision | +0.2 |
+| Wrong decision | −0.2 |
 
 Score clamped to [0.0, 1.0]. Feedback includes precision, recall, and missed issue details.
 
+## Deterministic Evaluation
+
+- Tasks cycle in fixed order when no `task_id` is provided.
+- `inference.py` uses `temperature=0` for reproducible LLM outputs.
+- Grader is pure function — same action + same task = same score, always.
+- All constants live in `env/config.py`.
+
+## Reviewer Persona Mode
+
+Each task carries a static persona embedded in the observation instruction:
+
+| Task | Persona |
+|------|---------|
+| easy | Pragmatic — correctness and maintainability |
+| medium | Performance — DB efficiency and scalability |
+| hard | Security — strict, flag every vulnerability |
+| expert | Security — cross-file reasoning required |
+
 ## Tasks
 
-| ID | Persona | Focus | Files |
-|----|---------|-------|-------|
-| easy | Pragmatic | Off-by-one logic bugs | 1 |
-| medium | Performance | Full-table-scan queries + unguarded export | 1 |
-| hard | Security | SQL injection + hardcoded JWT secret | 2 |
-| expert | Security | Unvalidated API input exploited by raw SQL in DB layer | 2 |
+| ID | Files | Focus |
+|----|-------|-------|
+| easy | 1 | Off-by-one logic bugs |
+| medium | 1 | Full-table-scan queries + unguarded export |
+| hard | 2 | SQL injection + hardcoded JWT secret |
+| expert | 2 | Unvalidated API input exploited by raw SQL in DB layer |
+
+## Production Considerations
+
+- All config constants in `env/config.py` — no magic numbers in logic.
+- Structured logging via Python `logging` module (`[INFO]` / `[ERROR]` format).
+- Input validation rejects malformed payloads before they reach the environment.
+- `/health` endpoint for deployment readiness checks.
+- `/metrics` returns last-episode precision, recall, and hallucination rate.
+- No database, no async complexity, no external dependencies beyond FastAPI + Pydantic.
 
 ## Setup
 
 ```bash
 pip install -r requirements.txt
 export HF_TOKEN=your_token
-python inference.py
+python inference.py          # run baseline across all tasks
 ```
 
 ```bash
