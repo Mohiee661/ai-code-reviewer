@@ -2,13 +2,15 @@
 description: >
   A pull request code review environment where an agent observes unified diffs,
   identifies bugs and security issues, and decides whether to approve or request changes.
-  Scored deterministically by a severity-weighted grader with partial credit.
-version: "1.0.0"
+  Features reviewer personas, two-phase multi-step episodes, and severity-aware grading.
+version: "2.0.0"
 api_url: "https://mohiee661-ai-code-reviewer.hf.space"
 tasks:
   - id: easy
-    description: "Off-by-one logic bugs in a single Python utility file."
+    description: "Off-by-one logic bugs in a single Python utility file. Persona: pragmatic maintainability reviewer."
   - id: medium
-    description: "Inefficient full-table-scan DB queries and missing pagination in a Flask API."
+    description: "Full-table-scan DB queries and unguarded export endpoint. Persona: performance-focused reviewer."
   - id: hard
-    description: "SQL injection + hardcoded JWT secret fallback spanning two files (multi-file reasoning required)."
+    description: "SQL injection + hardcoded JWT secret across two files. Persona: strict senior security reviewer."
+  - id: expert
+    description: "Missing input validation in API layer exploited by raw SQL in DB layer. Cross-file reasoning required. Persona: strict senior security reviewer."

@@ -1,22 +1,21 @@
 ﻿"""
-inference.py — OpenEnv baseline script for the PR Code Review environment.
+inference.py — OpenEnv baseline for the PR Code Review environment.
 
-Reads credentials from environment variables:
-  API_BASE_URL  : OpenAI-compatible API base URL
-  MODEL_NAME    : model identifier (e.g. gpt-4o)
-  HF_TOKEN      : API key / Hugging Face token
+Environment variables:
+  API_BASE_URL  : OpenAI-compatible base URL  (default: https://api.openai.com/v1)
+  MODEL_NAME    : model identifier             (default: gpt-4o)
+  HF_TOKEN      : API key / HF token
 
-Runs all 3 tasks (easy, medium, hard) deterministically and prints scores.
+Runs all tasks deterministically (temperature=0) using the two-phase protocol:
+  Phase 1 → submit issues only
+  Phase 2 → submit final_decision only
 """
-import json
-import os
-import sys
+import json, os
 from openai import OpenAI
 from env.environment import CodeReviewEnv
 from env.models import Action, Issue
 from env.tasks import TASKS
 
-# ── credentials ──────────────────────────────────────────────────────────────
 API_BASE_URL = os.environ.get("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o")
 HF_TOKEN     = os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
@@ -24,102 +23,117 @@ HF_TOKEN     = os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
 TEMPERATURE = 0
 MAX_TOKENS  = 1024
 
-SYSTEM_PROMPT = """\
-You are an expert code reviewer. You will be given a pull request diff.
-Identify every issue and decide whether to approve or request changes.
+ISSUES_PROMPT = """\
+You are an expert code reviewer. Given a pull request diff, identify every issue.
 
 Respond with ONLY valid JSON — no markdown, no explanation:
-{
+{{
   "issues": [
-    {
+    {{
       "file": "<filename>",
       "line": <integer>,
       "type": "<syntax|logic|performance|security|code_quality>",
       "severity": "<low|medium|high>",
       "description": "<concise description>"
-    }
-  ],
+    }}
+  ]
+}}"""
+
+DECISION_PROMPT = """\
+You are an expert code reviewer. Based on the issues you identified, decide whether to approve or request changes.
+
+Respond with ONLY valid JSON — no markdown, no explanation:
+{{
   "final_decision": "<approve|request_changes>"
-}"""
+}}"""
 
 
-def build_prompt(observation) -> str:
-    parts = ["Review the following pull request:\n"]
+def call_llm(client, system: str, user: str) -> str:
+    try:
+        resp = client.chat.completions.create(
+            model=MODEL_NAME,
+            messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+            temperature=TEMPERATURE,
+            max_tokens=MAX_TOKENS,
+        )
+        return resp.choices[0].message.content or ""
+    except Exception as e:
+        print(f"  [warn] API error: {e}")
+        return ""
+
+
+def parse_json(raw: str) -> dict:
+    text = raw.strip()
+    if text.startswith("```"):
+        text = "\n".join(text.split("\n")[1:]).rstrip("`").strip()
+    try:
+        return json.loads(text)
+    except Exception:
+        return {}
+
+
+def build_diff_prompt(observation) -> str:
+    parts = [f"{observation.instruction}\n"]
     for f in observation.files:
         parts.append(f"### {f.filename}\n```diff\n{f.diff}\n```\n")
     return "\n".join(parts)
 
 
-def parse_action(raw: str) -> Action:
-    try:
-        # strip markdown code fences if model wraps output
-        text = raw.strip()
-        if text.startswith("```"):
-            text = "\n".join(text.split("\n")[1:])
-            text = text.rstrip("`").strip()
-        data = json.loads(text)
-        issues = [Issue(**i) for i in data.get("issues", [])]
-        decision = data.get("final_decision", "approve")
+def run_task(client, env, task):
+    """Run one two-phase episode for a given task."""
+    # Phase 1 — issues
+    obs = env.reset(task_id=task.id)
+    if client:
+        raw = call_llm(client, ISSUES_PROMPT, build_diff_prompt(obs))
+        data = parse_json(raw)
+        issues = []
+        for i in data.get("issues", []):
+            try:
+                issues.append(Issue(**i))
+            except Exception:
+                pass
+    else:
+        issues = []
+
+    obs2, reward1, done1, info1 = env.step(Action(issues=issues))
+    assert not done1, "Expected phase 1 to not be terminal"
+
+    # Phase 2 — decision
+    if client:
+        raw2 = call_llm(client, DECISION_PROMPT, build_diff_prompt(obs2))
+        data2 = parse_json(raw2)
+        decision = data2.get("final_decision", "approve")
         if decision not in ("approve", "request_changes"):
             decision = "approve"
-        return Action(issues=issues, final_decision=decision)
-    except Exception as e:
-        print(f"  [warn] parse failed: {e} — using empty action")
-        return Action(issues=[], final_decision="approve")
-
-
-def run_task(client, env, task):
-    """Force a specific task and run one episode."""
-    env.current_task = task
-    env.done = False
-    from env.models import Observation
-    observation = Observation(files=task.files, instruction="Review this pull request.")
-
-    if client:
-        try:
-            resp = client.chat.completions.create(
-                model=MODEL_NAME,
-                messages=[
-                    {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user",   "content": build_prompt(observation)},
-                ],
-                temperature=TEMPERATURE,
-                max_tokens=MAX_TOKENS,
-            )
-            raw = resp.choices[0].message.content or ""
-        except Exception as exc:
-            print(f"  [warn] API call failed: {exc} — using empty action")
-            raw = ""
-        action = parse_action(raw)
     else:
-        action = Action(issues=[], final_decision="approve")
+        decision = "approve"
 
-    _, reward, done, info = env.step(action)
-    return reward, info
+    _, reward2, done2, info2 = env.step(Action(final_decision=decision))
+    assert done2, "Expected phase 2 to be terminal"
+    return reward2, info2
 
 
 def main():
-    use_api = bool(HF_TOKEN)
     client = None
-    if use_api:
+    if HF_TOKEN:
         client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
         print(f"[info] model={MODEL_NAME}  base={API_BASE_URL}")
     else:
-        print("[warn] No HF_TOKEN / OPENAI_API_KEY found — running dummy baseline (score=0)")
+        print("[warn] No token found — running dummy baseline (score=0)")
 
     env = CodeReviewEnv()
     total = 0.0
 
-    print("\n" + "="*55)
+    print("\n" + "=" * 60)
     for task in TASKS:
         reward, info = run_task(client, env, task)
         total += reward.score
         print(f"  task={info['task_id']:<8}  score={reward.score:.2f}  {reward.feedback}")
 
     avg = total / len(TASKS)
-    print("="*55)
+    print("=" * 60)
     print(f"  average score: {avg:.2f}  ({len(TASKS)} tasks)")
-    print("="*55 + "\n")
+    print("=" * 60 + "\n")
     return avg
 
 

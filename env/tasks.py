@@ -3,18 +3,28 @@ from env.models import FileDiff, Issue
 
 
 class Task:
-    def __init__(self, id: str, files: List[FileDiff], expected: List[Issue], decision: str):
+    def __init__(
+        self,
+        id: str,
+        files: List[FileDiff],
+        expected: List[Issue],
+        decision: str,
+        persona: str,
+    ):
         self.id = id
         self.files = files
         self.expected = expected
         self.decision = decision
+        self.persona = persona
 
 
-# ─────────────────────────────────────────────
-# EASY: Off-by-one bug in a simple utility function
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# EASY — off-by-one bugs in a utility function
+# Persona: pragmatic maintainability reviewer
+# ─────────────────────────────────────────────────────────────────────────────
 easy_task = Task(
     id="easy",
+    persona="You are a pragmatic reviewer focused on correctness and maintainability.",
     files=[
         FileDiff(
             filename="utils/list_helpers.py",
@@ -47,25 +57,27 @@ easy_task = Task(
             line=4,
             type="logic",
             severity="medium",
-            description="Off-by-one error: `len(items) - n - 1` skips the first of the last n items. Should be `len(items) - n`."
+            description="Off-by-one: `len(items) - n - 1` skips one item. Should be `len(items) - n`.",
         ),
         Issue(
             file="utils/list_helpers.py",
             line=9,
             type="logic",
             severity="medium",
-            description="`range(0, len(items) + 1, size)` causes an out-of-bounds iteration. Should be `range(0, len(items), size)`."
+            description="`range(0, len(items) + 1, size)` causes out-of-bounds iteration. Should be `range(0, len(items), size)`.",
         ),
     ],
-    decision="request_changes"
+    decision="request_changes",
 )
 
 
-# ─────────────────────────────────────────────
-# MEDIUM: Inefficient DB query + missing pagination
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# MEDIUM — full-table-scan queries + unguarded export endpoint
+# Persona: performance-focused reviewer
+# ─────────────────────────────────────────────────────────────────────────────
 medium_task = Task(
     id="medium",
+    persona="You are a performance-focused reviewer. Prioritise database efficiency and scalability.",
     files=[
         FileDiff(
             filename="api/users.py",
@@ -108,32 +120,34 @@ medium_task = Task(
             line=9,
             type="performance",
             severity="high",
-            description="Fetches all users from DB then filters in Python. Should use `User.query.filter_by(active=True).all()` to push filtering to the database."
+            description="Fetches all users then filters in Python. Use `User.query.filter_by(active=True).all()` to push filtering to the DB.",
         ),
         Issue(
             file="api/users.py",
             line=15,
             type="performance",
             severity="high",
-            description="Loads entire users table to find a single record by ID. Should use `User.query.get_or_404(user_id)` for an indexed lookup."
+            description="Loads entire users table to find one record. Use `User.query.get_or_404(user_id)` for an indexed lookup.",
         ),
         Issue(
             file="api/users.py",
             line=21,
             type="code_quality",
             severity="medium",
-            description="`/users/export` returns all users with no pagination or auth guard, which is a data exposure and scalability risk."
+            description="`/users/export` returns all users with no pagination or auth guard — data exposure and scalability risk.",
         ),
     ],
-    decision="request_changes"
+    decision="request_changes",
 )
 
 
-# ─────────────────────────────────────────────
-# HARD: SQL injection + secret leak across two files
-# ─────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────────────────────
+# HARD — SQL injection + hardcoded JWT secret across two files
+# Persona: strict senior security reviewer
+# ─────────────────────────────────────────────────────────────────────────────
 hard_task = Task(
     id="hard",
+    persona="You are a strict senior security reviewer. Flag every vulnerability, no matter how subtle.",
     files=[
         FileDiff(
             filename="auth/login.py",
@@ -197,25 +211,117 @@ hard_task = Task(
             line=11,
             type="security",
             severity="high",
-            description="SQL injection vulnerability: user input is interpolated directly into the query string. Use parameterized queries with `?` placeholders instead."
+            description="SQL injection: user input interpolated directly into query. Use parameterized queries with `?` placeholders.",
         ),
         Issue(
             file="auth/config.py",
             line=7,
             type="security",
             severity="high",
-            description="Hardcoded fallback secret `supersecret123` will be used if `JWT_SECRET` env var is unset. This exposes JWT signing to trivial forgery. Remove the fallback and raise an error if the secret is missing."
+            description="Hardcoded fallback secret `supersecret123` used when `JWT_SECRET` env var is unset — trivial JWT forgery. Remove fallback and raise on missing secret.",
         ),
         Issue(
             file="auth/login.py",
             line=4,
             type="security",
             severity="medium",
-            description="`SECRET_KEY` is imported directly from config rather than read from the environment at call time. Combined with the hardcoded fallback in config.py, tokens may be signed with a known secret in any environment where `JWT_SECRET` is not explicitly set."
+            description="`SECRET_KEY` imported from config at module load time. Combined with the hardcoded fallback, tokens may be signed with a known secret in any env where `JWT_SECRET` is not set.",
         ),
     ],
-    decision="request_changes"
+    decision="request_changes",
 )
 
 
-TASKS: List[Task] = [easy_task, medium_task, hard_task]
+# ─────────────────────────────────────────────────────────────────────────────
+# EXPERT — missing validation in API layer exploited by unsafe DB query
+# Persona: strict senior security reviewer
+# Requires cross-file reasoning: unvalidated input in routes.py flows into
+# a raw SQL call in db/queries.py
+# ─────────────────────────────────────────────────────────────────────────────
+expert_task = Task(
+    id="expert",
+    persona="You are a strict senior security reviewer. Flag every vulnerability, no matter how subtle.",
+    files=[
+        FileDiff(
+            filename="api/routes.py",
+            diff="""\
+--- a/api/routes.py
++++ b/api/routes.py
+@@ -1,14 +1,16 @@
+ from flask import Blueprint, request, jsonify
+-from db.queries import get_orders_for_user
++from db.queries import get_orders_for_user, get_product_by_name
+ 
+ api_bp = Blueprint("api", __name__)
+ 
+ @api_bp.route("/orders", methods=["GET"])
+ def orders():
+-    user_id = int(request.args.get("user_id", 0))
++    user_id = request.args.get("user_id", "0")
+     return jsonify(get_orders_for_user(user_id))
+ 
++@api_bp.route("/products/search", methods=["GET"])
++def search_product():
++    name = request.args.get("name", "")
++    return jsonify(get_product_by_name(name))
+"""
+        ),
+        FileDiff(
+            filename="db/queries.py",
+            diff="""\
+--- a/db/queries.py
++++ b/db/queries.py
+@@ -1,12 +1,20 @@
+ import sqlite3
+ 
+ DB = "app.db"
+ 
+ def get_orders_for_user(user_id):
+-    conn = sqlite3.connect(DB)
+-    cur = conn.cursor()
+-    cur.execute("SELECT * FROM orders WHERE user_id = ?", (user_id,))
+-    return [dict(zip([c[0] for c in cur.description], row)) for row in cur.fetchall()]
++    conn = sqlite3.connect(DB)
++    cur = conn.cursor()
++    cur.execute(f"SELECT * FROM orders WHERE user_id = {user_id}")
++    return [dict(zip([c[0] for c in cur.description], row)) for row in cur.fetchall()]
++
++def get_product_by_name(name):
++    conn = sqlite3.connect(DB)
++    cur = conn.cursor()
++    cur.execute(f"SELECT * FROM products WHERE name = '{name}'")
++    rows = cur.fetchall()
++    if not rows:
++        return []
++    return [dict(zip([c[0] for c in cur.description], row)) for row in rows]
+"""
+        ),
+    ],
+    expected=[
+        Issue(
+            file="db/queries.py",
+            line=9,
+            type="security",
+            severity="high",
+            description="SQL injection in `get_orders_for_user`: `user_id` is interpolated directly. Use parameterized query `(user_id,)`.",
+        ),
+        Issue(
+            file="db/queries.py",
+            line=15,
+            type="security",
+            severity="high",
+            description="SQL injection in `get_product_by_name`: `name` is interpolated into the query string. Use `WHERE name = ?` with `(name,)`.",
+        ),
+        Issue(
+            file="api/routes.py",
+            line=7,
+            type="security",
+            severity="medium",
+            description="`user_id` is passed as a raw string from query params without type validation. The missing `int()` cast means non-numeric input reaches the SQL layer unchecked.",
+        ),
+    ],
+    decision="request_changes",
+)
+
+
+TASKS: List[Task] = [easy_task, medium_task, hard_task, expert_task]

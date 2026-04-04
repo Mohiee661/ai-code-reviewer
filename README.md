@@ -7,26 +7,27 @@ sdk: docker
 pinned: false
 ---
 
-# AI Code Reviewer — OpenEnv Environment
+# AI Code Reviewer — OpenEnv Environment v2.0
 
 A real-world OpenEnv environment where an AI agent reviews pull requests,
 identifies bugs and security issues, and decides whether to approve or request changes.
 
-## Motivation
+## What's New in v2.0
 
-Code review is one of the most common high-value tasks in software engineering.
-It requires reasoning about correctness, performance, security, and cross-file
-dependencies — making it a strong benchmark for general-purpose coding agents.
-This environment provides a structured, reproducible way to evaluate and train
-agents on realistic PR review scenarios.
+- **Reviewer Persona Mode** — each task assigns a static persona (security, performance, pragmatic) embedded in the observation instruction, nudging the agent toward the right focus.
+- **Multi-step evaluation** — episodes run in two phases: phase 1 submits issues, phase 2 submits the final decision. Enables richer agent reasoning and cleaner separation of concerns.
+- **Severity-aware grading** — missing a high-severity issue now carries a −0.5 penalty; catching all high-severity issues earns a +0.1 bonus; high-severity false positives are penalised at −0.25 vs −0.1 for normal ones.
+- **Precision & recall metrics** — feedback now includes per-episode precision and recall.
+- **Expert task** — a new cross-file task where missing input validation in the API layer is exploited by a raw SQL query in the DB layer.
 
 ## Architecture
 
 ```
 Agent (LLM)
-    ↓  Action { issues[], final_decision }
+    ↓  Phase 1: Action { issues[] }
+    ↓  Phase 2: Action { final_decision }
 Environment (CodeReviewEnv)
-    ↓  grade(action, expected, decision)
+    ↓  grade(issues + decision, expected, correct_decision)
 Grader (severity-weighted, deterministic)
     ↓  Reward { score: 0.0–1.0, feedback: str }
 ```
@@ -35,122 +36,76 @@ Grader (severity-weighted, deterministic)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | /reset | Start new episode, returns Observation |
-| POST | /step | Submit Action, returns (obs, reward, done, info) |
-| GET | /state | Inspect current task (debug) |
-| GET | /docs | Swagger UI |
+| POST | /reset | Start episode. Optional body: `{"task_id": "easy"}` |
+| POST | /step | Phase 1: submit `issues`. Phase 2: submit `final_decision`. |
+| GET  | /state | Inspect task, phase, pending issues |
+| GET  | /docs | Swagger UI |
 
-## Observation Space
+## Two-Phase Flow
+
+```
+POST /reset  →  obs (phase="issues")
+POST /step   { "issues": [...] }  →  reward.score=0.0, done=false, phase="decision"
+POST /step   { "final_decision": "request_changes" }  →  final reward, done=true
+```
+
+## Observation
 
 ```json
 {
-  "files": [
-    { "filename": "auth/login.py", "diff": "--- a/auth/login.py\n+++ ..." }
-  ],
-  "instruction": "Review this pull request."
+  "files": [{ "filename": "auth/login.py", "diff": "..." }],
+  "instruction": "You are a strict senior security reviewer. Review this pull request...",
+  "persona": "You are a strict senior security reviewer.",
+  "phase": "issues"
 }
 ```
 
-Each observation contains one or more unified diffs and a fixed instruction string.
+## Action
 
-## Action Space
-
+Phase 1 (issues only):
 ```json
-{
-  "issues": [
-    {
-      "file": "auth/login.py",
-      "line": 11,
-      "type": "security",
-      "severity": "high",
-      "description": "SQL injection via f-string interpolation."
-    }
-  ],
-  "final_decision": "approve | request_changes"
-}
+{ "issues": [{ "file": "auth/login.py", "line": 11, "type": "security", "severity": "high", "description": "..." }] }
 ```
 
-Issue types: `syntax`, `logic`, `performance`, `security`, `code_quality`
-Severity levels: `low`, `medium`, `high`
+Phase 2 (decision only):
+```json
+{ "final_decision": "request_changes" }
+```
 
 ## Reward Design
 
 | Component | Effect |
 |-----------|--------|
-| Matched issue (high severity) | +1.0 toward base score |
-| Matched issue (medium severity) | +0.5 toward base score |
-| Matched issue (low severity) | +0.2 toward base score |
-| False positive | −0.1 per issue |
-| Correct final decision | +0.2 bonus |
-| Wrong final decision | −0.2 penalty |
+| Matched issue (high) | +1.0 toward base |
+| Matched issue (medium) | +0.5 toward base |
+| Matched issue (low) | +0.2 toward base |
+| Missed high-severity issue | −0.5 each |
+| All high-severity found | +0.1 bonus |
+| False positive (normal) | −0.1 each |
+| False positive (high severity) | −0.25 each |
+| Correct final decision | +0.2 |
+| Wrong final decision | −0.2 |
 
-An issue matches if `file` and `type` agree and `line` is within ±1.
-Final score is clamped to [0.0, 1.0]. Provides partial credit throughout.
+Score clamped to [0.0, 1.0]. Feedback includes precision, recall, and missed issue details.
 
 ## Tasks
 
-### easy
-Single-file diff (`utils/list_helpers.py`).
-Two off-by-one logic bugs in a list utility function.
-Expected: 2 `logic/medium` issues. Decision: `request_changes`.
-Baseline score: ~0.70
-
-### medium
-Single-file diff (`api/users.py`).
-Full-table-scan anti-patterns replacing efficient ORM queries, plus an
-unguarded data export endpoint.
-Expected: 2 `performance/high` + 1 `code_quality/medium`. Decision: `request_changes`.
-Baseline score: ~0.65
-
-### hard
-Two-file diff (`auth/login.py` + `auth/config.py`).
-SQL injection vulnerability + hardcoded JWT secret fallback. The third issue
-requires cross-file reasoning: the insecure fallback in `config.py` silently
-propagates into token signing in `login.py`.
-Expected: 2 `security/high` + 1 `security/medium`. Decision: `request_changes`.
-Baseline score: ~0.60
+| ID | Persona | Focus | Files |
+|----|---------|-------|-------|
+| easy | Pragmatic | Off-by-one logic bugs | 1 |
+| medium | Performance | Full-table-scan queries + unguarded export | 1 |
+| hard | Security | SQL injection + hardcoded JWT secret | 2 |
+| expert | Security | Unvalidated API input exploited by raw SQL in DB layer | 2 |
 
 ## Setup
 
-### Local
-
 ```bash
 pip install -r requirements.txt
-export HF_TOKEN=your_openai_or_hf_token
-export MODEL_NAME=gpt-4o          # optional, default: gpt-4o
-export API_BASE_URL=https://api.openai.com/v1  # optional
+export HF_TOKEN=your_token
 python inference.py
 ```
 
-### Docker
-
 ```bash
 docker build -t pr-env .
-# Run the API server
-docker run -p 8000:8000 pr-env
-# Run the baseline inference script
-docker run -e HF_TOKEN=sk-... pr-env python inference.py
+docker run -p 7860:7860 pr-env
 ```
-
-## Project Structure
-
-```
-├── inference.py        # Baseline script (OpenEnv entry point)
-├── server.py           # FastAPI HTTP server (reset/step/state)
-├── app.py              # HF Space entry point
-├── Dockerfile
-├── requirements.txt
-├── openenv.yaml
-├── env/
-│   ├── models.py       # Pydantic schemas
-│   ├── tasks.py        # PR task dataset (easy/medium/hard)
-│   ├── grader.py       # Deterministic severity-weighted grader
-│   └── environment.py  # OpenEnv interface
-└── README.md
-```
-
-## Reproducibility
-
-- Grader is fully deterministic: same action + same task = same score always.
-- `inference.py` uses `temperature=0` to minimize model variance.
-- Tasks are fixed datasets with no procedural generation.
