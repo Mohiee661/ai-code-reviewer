@@ -63,12 +63,25 @@ class CodeReviewEnv:
         return self._last_metrics
 
     def _observation(self) -> Observation:
+        meta = self.current_task.pr_metadata
+        pr_context = (
+            f'PR: "{meta.title}" — {meta.description}'
+            if meta else ""
+        )
         if self.phase == "issues":
-            instruction = f"{self.current_task.persona} Review this pull request and identify all issues."
+            instruction = (
+                f"{self.current_task.persona} "
+                f"{pr_context} "
+                "Review the diff below. Identify ALL issues: correctness bugs, "
+                "security vulnerabilities, performance regressions, and code quality problems. "
+                "Report exact file, line, type, severity, and a clear actionable description."
+            )
         else:
             instruction = (
                 f"{self.current_task.persona} "
-                "Issues submitted. Now provide your final_decision: approve or request_changes."
+                "You have submitted your issues. "
+                "Based on the severity and number of issues found, provide your final_decision: "
+                "approve (no blocking issues) or request_changes (bugs, security, or significant problems)."
             )
         return Observation(
             files=self.current_task.files,
