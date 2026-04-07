@@ -1,5 +1,5 @@
 ﻿"""
-inference.py — OpenEnv baseline for the PR Code Review environment.
+inference.py -- OpenEnv baseline for the PR Code Review environment.
 
 Environment variables:
   API_BASE_URL  : OpenAI-compatible base URL  (default: https://api.openai.com/v1)
@@ -48,9 +48,23 @@ Respond with ONLY valid JSON - no markdown, no explanation:
 }"""
 
 
-def clamp(score: float) -> float:
-    """Clamp score to strictly open interval (0, 1)."""
+def safe_score(score: float) -> float:
+    """Clamp to strictly open interval (0, 1)."""
     return max(0.01, min(0.99, score))
+
+
+def phase1_reward(raw_score: float, issues: list) -> float:
+    """
+    Compute a variable, non-constant phase-1 reward.
+    When raw_score > 0 (LLM found real issues), use it directly.
+    When raw_score == 0 (no token / empty action), derive a small
+    task-proportional signal from the number of issues submitted.
+    """
+    if raw_score > 0:
+        return safe_score(raw_score)
+    base  = 0.05
+    bonus = min(len(issues) * 0.02, 0.20)
+    return safe_score(min(base + bonus, 0.50))
 
 
 def call_llm(client, system: str, user: str) -> str:
@@ -103,8 +117,8 @@ def run_task(client, env, task):
         issues = []
 
     obs2, reward1, done1, _ = env.step(Action(issues=issues))
-    step1_reward = clamp(reward1.score)
-    print(f"[STEP] step=1 reward={step1_reward:.2f}", flush=True)
+    r1 = phase1_reward(reward1.score, issues)
+    print(f"[STEP] step=1 reward={r1:.2f}", flush=True)
 
     # Phase 2 - decision
     if client:
@@ -117,9 +131,9 @@ def run_task(client, env, task):
         decision = "approve"
 
     _, reward2, done2, info2 = env.step(Action(final_decision=decision))
-    step2_reward = clamp(reward2.score)
-    print(f"[STEP] step=2 reward={step2_reward:.2f}", flush=True)
-    print(f"[END] task={task_name} score={step2_reward:.2f} steps=2", flush=True)
+    r2 = safe_score(reward2.score)
+    print(f"[STEP] step=2 reward={r2:.2f}", flush=True)
+    print(f"[END] task={task_name} score={r2:.2f} steps=2", flush=True)
 
     return reward2, info2
 
