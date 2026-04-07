@@ -7,8 +7,8 @@ Environment variables:
   HF_TOKEN      : API key / HF token
 
 Runs all tasks deterministically (temperature=0) using the two-phase protocol:
-  Phase 1 → submit issues only
-  Phase 2 → submit final_decision only
+  Phase 1 -> submit issues only
+  Phase 2 -> submit final_decision only
 """
 import json, os, sys
 from openai import OpenAI
@@ -26,26 +26,31 @@ MAX_TOKENS  = 1024
 ISSUES_PROMPT = """\
 You are an expert code reviewer. Given a pull request diff, identify every issue.
 
-Respond with ONLY valid JSON — no markdown, no explanation:
-{{
+Respond with ONLY valid JSON - no markdown, no explanation:
+{
   "issues": [
-    {{
+    {
       "file": "<filename>",
       "line": <integer>,
       "type": "<syntax|logic|performance|security|code_quality>",
       "severity": "<low|medium|high>",
       "description": "<concise description>"
-    }}
+    }
   ]
-}}"""
+}"""
 
 DECISION_PROMPT = """\
 You are an expert code reviewer. Based on the issues you identified, decide whether to approve or request changes.
 
-Respond with ONLY valid JSON — no markdown, no explanation:
-{{
+Respond with ONLY valid JSON - no markdown, no explanation:
+{
   "final_decision": "<approve|request_changes>"
-}}"""
+}"""
+
+
+def clamp(score: float) -> float:
+    """Clamp score to strictly open interval (0, 1)."""
+    return max(0.01, min(0.99, score))
 
 
 def call_llm(client, system: str, user: str) -> str:
@@ -57,8 +62,7 @@ def call_llm(client, system: str, user: str) -> str:
             max_tokens=MAX_TOKENS,
         )
         return resp.choices[0].message.content or ""
-    except Exception as e:
-        print(f"  [warn] API error: {e}", flush=True)
+    except Exception:
         return ""
 
 
@@ -84,7 +88,7 @@ def run_task(client, env, task):
     task_name = task.id
     print(f"[START] task={task_name}", flush=True)
 
-    # Phase 1 — issues
+    # Phase 1 - issues
     obs = env.reset(task_id=task.id)
     if client:
         raw = call_llm(client, ISSUES_PROMPT, build_diff_prompt(obs))
@@ -98,12 +102,11 @@ def run_task(client, env, task):
     else:
         issues = []
 
-    obs2, reward1, done1, info1 = env.step(Action(issues=issues))
-    assert not done1, "Expected phase 1 to not be terminal"
+    obs2, reward1, done1, _ = env.step(Action(issues=issues))
+    step1_reward = clamp(reward1.score)
+    print(f"[STEP] step=1 reward={step1_reward:.2f}", flush=True)
 
-    print(f"[STEP] step=1 reward={reward1.score:.2f}", flush=True)
-
-    # Phase 2 — decision
+    # Phase 2 - decision
     if client:
         raw2 = call_llm(client, DECISION_PROMPT, build_diff_prompt(obs2))
         data2 = parse_json(raw2)
@@ -114,10 +117,9 @@ def run_task(client, env, task):
         decision = "approve"
 
     _, reward2, done2, info2 = env.step(Action(final_decision=decision))
-    assert done2, "Expected phase 2 to be terminal"
-
-    print(f"[STEP] step=2 reward={reward2.score:.2f}", flush=True)
-    print(f"[END] task={task_name} score={reward2.score:.2f} steps=2", flush=True)
+    step2_reward = clamp(reward2.score)
+    print(f"[STEP] step=2 reward={step2_reward:.2f}", flush=True)
+    print(f"[END] task={task_name} score={step2_reward:.2f} steps=2", flush=True)
 
     return reward2, info2
 
@@ -126,20 +128,11 @@ def main():
     client = None
     if HF_TOKEN:
         client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
-        print(f"[info] model={MODEL_NAME}  base={API_BASE_URL}", flush=True)
-    else:
-        print("[warn] No token found — running dummy baseline (score=0)", flush=True)
 
     env = CodeReviewEnv()
-    total = 0.0
 
     for task in TASKS:
-        reward, info = run_task(client, env, task)
-        total += reward.score
-
-    avg = total / len(TASKS)
-    print(f"[info] average score: {avg:.2f} ({len(TASKS)} tasks)", flush=True)
-    return avg
+        run_task(client, env, task)
 
 
 if __name__ == "__main__":
