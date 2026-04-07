@@ -10,7 +10,7 @@ Runs all tasks deterministically (temperature=0) using the two-phase protocol:
   Phase 1 → submit issues only
   Phase 2 → submit final_decision only
 """
-import json, os
+import json, os, sys
 from openai import OpenAI
 from env.environment import CodeReviewEnv
 from env.models import Action, Issue
@@ -58,7 +58,7 @@ def call_llm(client, system: str, user: str) -> str:
         )
         return resp.choices[0].message.content or ""
     except Exception as e:
-        print(f"  [warn] API error: {e}")
+        print(f"  [warn] API error: {e}", flush=True)
         return ""
 
 
@@ -81,6 +81,9 @@ def build_diff_prompt(observation) -> str:
 
 def run_task(client, env, task):
     """Run one two-phase episode for a given task."""
+    task_name = task.id
+    print(f"[START] task={task_name}", flush=True)
+
     # Phase 1 — issues
     obs = env.reset(task_id=task.id)
     if client:
@@ -98,6 +101,8 @@ def run_task(client, env, task):
     obs2, reward1, done1, info1 = env.step(Action(issues=issues))
     assert not done1, "Expected phase 1 to not be terminal"
 
+    print(f"[STEP] step=1 reward={reward1.score:.2f}", flush=True)
+
     # Phase 2 — decision
     if client:
         raw2 = call_llm(client, DECISION_PROMPT, build_diff_prompt(obs2))
@@ -110,6 +115,10 @@ def run_task(client, env, task):
 
     _, reward2, done2, info2 = env.step(Action(final_decision=decision))
     assert done2, "Expected phase 2 to be terminal"
+
+    print(f"[STEP] step=2 reward={reward2.score:.2f}", flush=True)
+    print(f"[END] task={task_name} score={reward2.score:.2f} steps=2", flush=True)
+
     return reward2, info2
 
 
@@ -117,23 +126,19 @@ def main():
     client = None
     if HF_TOKEN:
         client = OpenAI(api_key=HF_TOKEN, base_url=API_BASE_URL)
-        print(f"[info] model={MODEL_NAME}  base={API_BASE_URL}")
+        print(f"[info] model={MODEL_NAME}  base={API_BASE_URL}", flush=True)
     else:
-        print("[warn] No token found — running dummy baseline (score=0)")
+        print("[warn] No token found — running dummy baseline (score=0)", flush=True)
 
     env = CodeReviewEnv()
     total = 0.0
 
-    print("\n" + "=" * 60)
     for task in TASKS:
         reward, info = run_task(client, env, task)
         total += reward.score
-        print(f"  task={info['task_id']:<8}  score={reward.score:.2f}  {reward.feedback}")
 
     avg = total / len(TASKS)
-    print("=" * 60)
-    print(f"  average score: {avg:.2f}  ({len(TASKS)} tasks)")
-    print("=" * 60 + "\n")
+    print(f"[info] average score: {avg:.2f} ({len(TASKS)} tasks)", flush=True)
     return avg
 
 

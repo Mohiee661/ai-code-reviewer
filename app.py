@@ -1,6 +1,14 @@
-# app.py - HF Space entry point
-import uvicorn
-from api import app  # noqa: F401
+import gradio as gr
 
-if __name__ == "__main__":
-    uvicorn.run("api:app", host="0.0.0.0", port=7860)
+def review_code(code):
+    # simple placeholder logic
+    return f"Review:\n\nYour code looks fine 👍\n\nInput was:\n{code}"
+
+demo = gr.Interface(
+    fn=review_code,
+    inputs=gr.Textbox(lines=10, placeholder="Paste your code here..."),
+    outputs="text",
+    title="AI Code Reviewer"
+)
+
+demo.launch()
