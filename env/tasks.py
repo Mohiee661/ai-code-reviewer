@@ -1,5 +1,5 @@
 from typing import List
-from env.models import FileDiff, Issue
+from env.models import FileDiff, Issue, PRMetadata
 
 
 class Task:
@@ -10,24 +10,33 @@ class Task:
         expected: List[Issue],
         decision: str,
         persona: str,
+        pr_metadata: PRMetadata,
     ):
         self.id = id
         self.files = files
         self.expected = expected
         self.decision = decision
         self.persona = persona
+        self.pr_metadata = pr_metadata
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EASY — off-by-one bugs in a utility function
-# Persona: pragmatic maintainability reviewer
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# EASY — Off-by-one bugs in utility functions
+# ═════════════════════════════════════════════════════════════════════════════
 easy_task = Task(
     id="easy",
     persona="You are a pragmatic reviewer focused on correctness and maintainability.",
+    pr_metadata=PRMetadata(
+        title="refactor: optimize list utility functions",
+        description="Refactored list helpers to improve performance. Changed slicing logic and added bounds checking.",
+        author_intent="Improve performance of list operations by reducing unnecessary iterations.",
+    ),
     files=[
         FileDiff(
             filename="utils/list_helpers.py",
+            language="python",
+            lines_added=4,
+            lines_removed=2,
             diff="""\
 --- a/utils/list_helpers.py
 +++ b/utils/list_helpers.py
@@ -57,30 +66,37 @@ easy_task = Task(
             line=4,
             type="logic",
             severity="medium",
-            description="Off-by-one: `len(items) - n - 1` skips one item. Should be `len(items) - n`.",
+            description="Off-by-one error: `len(items) - n - 1` skips the first of the last n items. Should be `len(items) - n` to correctly slice the last n elements.",
         ),
         Issue(
             file="utils/list_helpers.py",
             line=9,
             type="logic",
             severity="medium",
-            description="`range(0, len(items) + 1, size)` causes out-of-bounds iteration. Should be `range(0, len(items), size)`.",
+            description="`range(0, len(items) + 1, size)` causes IndexError on the final iteration when `i` exceeds list bounds. Should be `range(0, len(items), size)` to avoid out-of-bounds access.",
         ),
     ],
     decision="request_changes",
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MEDIUM — full-table-scan queries + unguarded export endpoint
-# Persona: performance-focused reviewer
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# MEDIUM — Database performance anti-patterns
+# ═════════════════════════════════════════════════════════════════════════════
 medium_task = Task(
     id="medium",
-    persona="You are a performance-focused reviewer. Prioritise database efficiency and scalability.",
+    persona="You are a performance-focused reviewer. Prioritize database efficiency and scalability.",
+    pr_metadata=PRMetadata(
+        title="feat: add user export endpoint and refactor queries",
+        description="Added /users/export for bulk data export. Refactored existing endpoints to use consistent query patterns.",
+        author_intent="Provide admin functionality for exporting user data and standardize query logic across endpoints.",
+    ),
     files=[
         FileDiff(
             filename="api/users.py",
+            language="python",
+            lines_added=10,
+            lines_removed=4,
             diff="""\
 --- a/api/users.py
 +++ b/api/users.py
@@ -120,37 +136,44 @@ medium_task = Task(
             line=9,
             type="performance",
             severity="high",
-            description="Fetches all users then filters in Python. Use `User.query.filter_by(active=True).all()` to push filtering to the DB.",
+            description="N+1 query anti-pattern: fetches all users into memory then filters in Python. This causes full table scan on every request. Use `User.query.filter_by(active=True).all()` to push filtering to database with indexed WHERE clause.",
         ),
         Issue(
             file="api/users.py",
             line=15,
             type="performance",
             severity="high",
-            description="Loads entire users table to find one record. Use `User.query.get_or_404(user_id)` for an indexed lookup.",
+            description="Loads entire users table to find single record by primary key. This is O(n) when it should be O(1). Use `User.query.get_or_404(user_id)` which uses the primary key index for constant-time lookup.",
         ),
         Issue(
             file="api/users.py",
             line=21,
             type="code_quality",
             severity="medium",
-            description="`/users/export` returns all users with no pagination or auth guard — data exposure and scalability risk.",
+            description="`/users/export` endpoint returns unbounded result set with no pagination, rate limiting, or authentication. This creates DoS vector and data exposure risk. Add pagination (LIMIT/OFFSET) and require admin authentication.",
         ),
     ],
     decision="request_changes",
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# HARD — SQL injection + hardcoded JWT secret across two files
-# Persona: strict senior security reviewer
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# HARD — Security vulnerabilities across multiple files
+# ═════════════════════════════════════════════════════════════════════════════
 hard_task = Task(
     id="hard",
     persona="You are a strict senior security reviewer. Flag every vulnerability, no matter how subtle.",
+    pr_metadata=PRMetadata(
+        title="refactor: simplify auth module and centralize config",
+        description="Moved database connection logic to config module. Simplified JWT token generation by importing secret directly.",
+        author_intent="Reduce code duplication by centralizing configuration. Make auth code more readable.",
+    ),
     files=[
         FileDiff(
             filename="auth/login.py",
+            language="python",
+            lines_added=11,
+            lines_removed=13,
             diff="""\
 --- a/auth/login.py
 +++ b/auth/login.py
@@ -187,6 +210,9 @@ hard_task = Task(
         ),
         FileDiff(
             filename="auth/config.py",
+            language="python",
+            lines_added=5,
+            lines_removed=4,
             diff="""\
 --- a/auth/config.py
 +++ b/auth/config.py
@@ -211,39 +237,44 @@ hard_task = Task(
             line=11,
             type="security",
             severity="high",
-            description="SQL injection: user input interpolated directly into query. Use parameterized queries with `?` placeholders.",
+            description="Critical SQL injection vulnerability: user-controlled `username` and `password` are interpolated directly into query string via f-string. Attacker can inject `' OR '1'='1` to bypass authentication. Use parameterized query: `cursor.execute('SELECT * FROM users WHERE username = ? AND password = ?', (username, password))`.",
         ),
         Issue(
             file="auth/config.py",
             line=7,
             type="security",
             severity="high",
-            description="Hardcoded fallback secret `supersecret123` used when `JWT_SECRET` env var is unset — trivial JWT forgery. Remove fallback and raise on missing secret.",
+            description="Hardcoded JWT secret `supersecret123` used as fallback when `JWT_SECRET` environment variable is unset. This allows trivial token forgery in any deployment where env var is missing. Remove fallback entirely and raise exception if JWT_SECRET is not configured.",
         ),
         Issue(
             file="auth/login.py",
             line=4,
             type="security",
             severity="medium",
-            description="`SECRET_KEY` imported from config at module load time. Combined with the hardcoded fallback, tokens may be signed with a known secret in any env where `JWT_SECRET` is not set.",
+            description="`SECRET_KEY` is imported at module load time from config.py. Combined with the hardcoded fallback in config.py, this means tokens will be signed with the known secret `supersecret123` in any environment where `JWT_SECRET` is not explicitly set, creating a silent security failure.",
         ),
     ],
     decision="request_changes",
 )
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# EXPERT — missing validation in API layer exploited by unsafe DB query
-# Persona: strict senior security reviewer
-# Requires cross-file reasoning: unvalidated input in routes.py flows into
-# a raw SQL call in db/queries.py
-# ─────────────────────────────────────────────────────────────────────────────
+# ═════════════════════════════════════════════════════════════════════════════
+# EXPERT — Cross-file data flow vulnerability (requires deep reasoning)
+# ═════════════════════════════════════════════════════════════════════════════
 expert_task = Task(
     id="expert",
     persona="You are a strict senior security reviewer. Flag every vulnerability, no matter how subtle.",
+    pr_metadata=PRMetadata(
+        title="feat: add product search and refactor order queries",
+        description="Added new product search endpoint. Refactored order queries to use f-strings for better readability. Removed unnecessary type casting in routes.",
+        author_intent="Improve code readability by using modern Python f-strings. Add product search feature requested by product team.",
+    ),
     files=[
         FileDiff(
             filename="api/routes.py",
+            language="python",
+            lines_added=6,
+            lines_removed=2,
             diff="""\
 --- a/api/routes.py
 +++ b/api/routes.py
@@ -268,6 +299,9 @@ expert_task = Task(
         ),
         FileDiff(
             filename="db/queries.py",
+            language="python",
+            lines_added=13,
+            lines_removed=4,
             diff="""\
 --- a/db/queries.py
 +++ b/db/queries.py
@@ -303,21 +337,21 @@ expert_task = Task(
             line=9,
             type="security",
             severity="high",
-            description="SQL injection in `get_orders_for_user`: `user_id` is interpolated directly. Use parameterized query `(user_id,)`.",
+            description="SQL injection in `get_orders_for_user`: `user_id` parameter is interpolated directly into query via f-string. Attacker can inject SQL like `1 OR 1=1` to access all orders. Use parameterized query: `cur.execute('SELECT * FROM orders WHERE user_id = ?', (user_id,))`.",
         ),
         Issue(
             file="db/queries.py",
             line=15,
             type="security",
             severity="high",
-            description="SQL injection in `get_product_by_name`: `name` is interpolated into the query string. Use `WHERE name = ?` with `(name,)`.",
+            description="SQL injection in `get_product_by_name`: `name` parameter is interpolated into query string. Attacker can inject `' OR '1'='1` to dump entire products table or use UNION attacks. Use parameterized query: `cur.execute('SELECT * FROM products WHERE name = ?', (name,))`.",
         ),
         Issue(
             file="api/routes.py",
             line=7,
             type="security",
             severity="medium",
-            description="`user_id` is passed as a raw string from query params without type validation. The missing `int()` cast means non-numeric input reaches the SQL layer unchecked.",
+            description="Removed input validation: `user_id` is now passed as raw string from query params without `int()` cast. This allows non-numeric input to reach the SQL layer unchecked. Combined with the SQL injection in db/queries.py line 9, this creates an exploitable attack surface. Restore `int()` cast and add error handling.",
         ),
     ],
     decision="request_changes",

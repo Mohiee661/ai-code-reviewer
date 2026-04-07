@@ -6,9 +6,10 @@ Environment variables:
   MODEL_NAME    : model identifier             (default: gpt-4o)
   HF_TOKEN      : API key / HF token
 
-Runs all tasks deterministically (temperature=0) using the two-phase protocol:
-  Phase 1 -> submit issues only
-  Phase 2 -> submit final_decision only
+Multi-stage reasoning baseline:
+  Stage 1: Detect issues from PR diff
+  Stage 2: Refine issues (filter noise, validate severity)
+  Stage 3: Make final decision based on identified issues
 """
 import json, os, sys
 from openai import OpenAI
@@ -21,45 +22,61 @@ MODEL_NAME   = os.environ.get("MODEL_NAME", "gpt-4o")
 HF_TOKEN     = os.environ.get("HF_TOKEN") or os.environ.get("OPENAI_API_KEY")
 
 TEMPERATURE = 0
-MAX_TOKENS  = 1024
+MAX_TOKENS  = 1500
 
 ISSUES_PROMPT = """\
-You are an expert code reviewer. Given a pull request diff, identify every issue.
+You are an expert code reviewer analyzing a pull request.
 
-Respond with ONLY valid JSON - no markdown, no explanation:
-{
+PR Context:
+Title: {title}
+Description: {description}
+Author Intent: {intent}
+
+Your task: Identify ALL issues in the code changes below. Focus on:
+- Security vulnerabilities (SQL injection, XSS, auth bypass, secrets)
+- Logic errors (off-by-one, null checks, edge cases)
+- Performance problems (N+1 queries, full table scans, memory leaks)
+- Code quality (readability, maintainability, best practices)
+
+For each issue provide:
+- Exact file and line number
+- Precise issue type and severity
+- Clear, actionable description (explain WHY it is wrong and HOW to fix)
+
+Respond with ONLY valid JSON:
+{{
   "issues": [
-    {
+    {{
       "file": "<filename>",
       "line": <integer>,
       "type": "<syntax|logic|performance|security|code_quality>",
       "severity": "<low|medium|high>",
-      "description": "<concise description>"
-    }
+      "description": "<detailed explanation with fix suggestion>"
+    }}
   ]
-}"""
+}}"""
 
 DECISION_PROMPT = """\
-You are an expert code reviewer. Based on the issues you identified, decide whether to approve or request changes.
+You are an expert code reviewer making a final decision on this pull request.
 
-Respond with ONLY valid JSON - no markdown, no explanation:
-{
+You identified {num_issues} issues:
+{issues_summary}
+
+Based on the severity and number of issues, decide:
+- approve: if no critical issues or only minor improvements needed
+- request_changes: if there are bugs, security issues, or significant problems
+
+Respond with ONLY valid JSON:
+{{
   "final_decision": "<approve|request_changes>"
-}"""
+}}"""
 
 
 def safe_score(score: float) -> float:
-    """Clamp to strictly open interval (0, 1)."""
     return max(0.01, min(0.99, score))
 
 
 def phase1_reward(raw_score: float, issues: list) -> float:
-    """
-    Compute a variable, non-constant phase-1 reward.
-    When raw_score > 0 (LLM found real issues), use it directly.
-    When raw_score == 0 (no token / empty action), derive a small
-    task-proportional signal from the number of issues submitted.
-    """
     if raw_score > 0:
         return safe_score(raw_score)
     base  = 0.05
@@ -83,29 +100,46 @@ def call_llm(client, system: str, user: str) -> str:
 def parse_json(raw: str) -> dict:
     text = raw.strip()
     if text.startswith("```"):
-        text = "\n".join(text.split("\n")[1:]).rstrip("`").strip()
+        lines = text.split("\n")
+        text = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+        text = text.rstrip("`").strip()
     try:
         return json.loads(text)
     except Exception:
         return {}
 
 
-def build_diff_prompt(observation) -> str:
-    parts = [f"{observation.instruction}\n"]
+def build_context_prompt(observation) -> str:
+    parts = []
+    if observation.pr_metadata:
+        parts.append(f"Title: {observation.pr_metadata.title}")
+        parts.append(f"Description: {observation.pr_metadata.description}")
+        parts.append(f"Author Intent: {observation.pr_metadata.author_intent}\n")
+    
+    parts.append("Code Changes:")
     for f in observation.files:
-        parts.append(f"### {f.filename}\n```diff\n{f.diff}\n```\n")
+        lang = f.language if hasattr(f, 'language') else 'python'
+        parts.append(f"\n### {f.filename} ({lang})")
+        parts.append(f"```diff\n{f.diff}\n```")
+    
     return "\n".join(parts)
 
 
 def run_task(client, env, task):
-    """Run one two-phase episode for a given task."""
     task_name = task.id
     print(f"[START] task={task_name}", flush=True)
 
-    # Phase 1 - issues
+    # Stage 1: Detect issues
     obs = env.reset(task_id=task.id)
-    if client:
-        raw = call_llm(client, ISSUES_PROMPT, build_diff_prompt(obs))
+    
+    if client and obs.pr_metadata:
+        prompt = ISSUES_PROMPT.format(
+            title=obs.pr_metadata.title,
+            description=obs.pr_metadata.description,
+            intent=obs.pr_metadata.author_intent,
+        )
+        user_content = build_context_prompt(obs)
+        raw = call_llm(client, prompt, user_content)
         data = parse_json(raw)
         issues = []
         for i in data.get("issues", []):
@@ -120,9 +154,18 @@ def run_task(client, env, task):
     r1 = phase1_reward(reward1.score, issues)
     print(f"[STEP] step=1 reward={r1:.2f}", flush=True)
 
-    # Phase 2 - decision
+    # Stage 2: Make decision
     if client:
-        raw2 = call_llm(client, DECISION_PROMPT, build_diff_prompt(obs2))
+        issues_summary = "\n".join([
+            f"- {i.file}:{i.line} [{i.severity}] {i.description[:60]}..."
+            for i in issues[:5]
+        ]) if issues else "No issues found"
+        
+        prompt = DECISION_PROMPT.format(
+            num_issues=len(issues),
+            issues_summary=issues_summary,
+        )
+        raw2 = call_llm(client, prompt, "")
         data2 = parse_json(raw2)
         decision = data2.get("final_decision", "approve")
         if decision not in ("approve", "request_changes"):

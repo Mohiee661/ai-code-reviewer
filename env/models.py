@@ -1,11 +1,11 @@
-from typing import List, Literal, Optional
+from typing import List, Literal, Optional, Dict
 from pydantic import BaseModel
 
 
 class Issue(BaseModel):
     file: str
     line: int
-    type: str  # "syntax" | "logic" | "performance" | "security" | "code_quality"
+    type: str
     severity: Literal["low", "medium", "high"]
     description: str
 
@@ -13,13 +13,23 @@ class Issue(BaseModel):
 class FileDiff(BaseModel):
     filename: str
     diff: str
+    language: str = "python"
+    lines_added: int = 0
+    lines_removed: int = 0
+
+
+class PRMetadata(BaseModel):
+    title: str
+    description: str
+    author_intent: str
 
 
 class Observation(BaseModel):
     files: List[FileDiff]
     instruction: str
-    persona: str = ""          # reviewer persona hint
-    phase: str = "issues"      # "issues" | "decision"
+    persona: str = ""
+    phase: str = "issues"
+    pr_metadata: Optional[PRMetadata] = None
 
 
 class Action(BaseModel):
@@ -27,6 +37,15 @@ class Action(BaseModel):
     final_decision: Optional[Literal["approve", "request_changes"]] = None
 
 
+class RewardBreakdown(BaseModel):
+    issue_coverage: float
+    severity_awareness: float
+    precision: float
+    explanation_quality: float
+    decision_correctness: float
+
+
 class Reward(BaseModel):
-    score: float   # 0.0 → 1.0
+    score: float
     feedback: str
+    breakdown: Optional[RewardBreakdown] = None

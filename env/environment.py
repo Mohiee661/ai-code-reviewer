@@ -75,6 +75,7 @@ class CodeReviewEnv:
             instruction=instruction,
             persona=self.current_task.persona,
             phase=self.phase,
+            pr_metadata=self.current_task.pr_metadata,
         )
 
 
