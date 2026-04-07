@@ -69,7 +69,8 @@ def grade(action: Action, expected: List[Issue], correct_decision: str) -> Rewar
     bonus   = (config.ALL_HIGH_BONUS if all_high_found else 0.0)
     bonus  += config.DECISION_BONUS if decision_correct else -config.DECISION_BONUS
 
-    score = max(0.0, min(1.0, base - penalty + bonus))
+    raw_score = base - penalty + bonus
+    score = max(0.01, min(0.99, raw_score))
 
     matched_count   = sum(matched)
     predicted_count = len(action.issues)
