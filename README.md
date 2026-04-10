@@ -240,9 +240,10 @@ Final score clamped to (0.01, 0.99) for validator compliance.
 
 ```bash
 pip install -r requirements.txt
-export HF_TOKEN=your_openai_or_hf_token
 python inference.py
 ```
+
+Set `OPENAI_API_KEY` or `HF_TOKEN` to run the full LLM baseline across every task. Without an API key, `python baseline.py` runs a deterministic offline smoke test of the two-step environment.
 
 ```bash
 docker build -t pr-env .
