@@ -42,7 +42,7 @@ class CodeReviewEnv:
 
         full_action = Action(issues=self.pending_issues, final_decision=action.final_decision)
         reward = grade(full_action, self.current_task.expected, self.current_task.decision)
-        self._last_metrics = _extract_metrics(reward.feedback)
+        self._last_metrics = _extract_metrics(reward)
         self.phase = "done"
         log.info("Step phase: decision → done  task=%s  score=%.2f", self.current_task.id, reward.score)
         return self._observation(), reward, True, {"task_id": self.current_task.id, "phase": "done"}
@@ -92,23 +92,20 @@ class CodeReviewEnv:
         )
 
 
-def _extract_metrics(feedback: str) -> dict:
-    """Parse precision/recall from grader feedback string."""
-    precision = recall = 0.0
-    # Feedback contains: "Precision: 0.75  Recall: 0.50."
-    for segment in feedback.split("Precision:")[1:]:
-        try:
-            precision = float(segment.strip().split()[0])
-        except (ValueError, IndexError):
-            pass
-    for segment in feedback.split("Recall:")[1:]:
-        try:
-            recall = float(segment.strip().split()[0].rstrip("."))
-        except (ValueError, IndexError):
-            pass
+def _extract_metrics(reward: Reward) -> dict:
+    """Return judge-facing metrics from the structured reward breakdown."""
+    if reward.breakdown is None:
+        return {}
+
+    precision = reward.breakdown.precision
+    recall = reward.breakdown.issue_coverage
     hallucination_rate = round(1.0 - precision, 4)
     return {
         "precision":          round(precision, 4),
         "recall":             round(recall, 4),
+        "severity_awareness": round(reward.breakdown.severity_awareness, 4),
+        "explanation_quality": round(reward.breakdown.explanation_quality, 4),
+        "decision_correctness": round(reward.breakdown.decision_correctness, 4),
         "hallucination_rate": hallucination_rate,
+        "score":              round(reward.score, 4),
     }

@@ -31,8 +31,8 @@ Unlike binary pass/fail scoring, we evaluate 5 dimensions weighted by real-world
 | **Issue Coverage** | 40% | Finding all true bugs (recall) |
 | **Severity Awareness** | 20% | Prioritizing critical issues (security > performance > style) |
 | **Precision** | 20% | Avoiding false positives and noise |
-| **Explanation Quality** | 10% | Clear, actionable descriptions |
-| **Decision Correctness** | 10% | Approve vs request changes |
+| **Explanation Quality** | 5% | Clear, actionable descriptions |
+| **Decision Correctness** | 15% | Approve vs request changes |
 
 This mirrors how engineering teams actually evaluate reviewers.
 
@@ -92,8 +92,8 @@ This enables:
 │  ├─ Issue Coverage (40%): recall + high-severity penalty   │
 │  ├─ Severity Awareness (20%): prioritization accuracy      │
 │  ├─ Precision (20%): false positive rate                   │
-│  ├─ Explanation Quality (10%): description clarity         │
-│  └─ Decision Correctness (10%): approve vs request changes │
+│  ├─ Explanation Quality (5%): description clarity          │
+│  └─ Decision Correctness (15%): approve vs request changes │
 └────────────────────┬────────────────────────────────────────┘
                      │
                      ▼
@@ -220,11 +220,11 @@ score = (
     0.40 * issue_coverage +      # Found 3/4 issues = 0.75
     0.20 * severity_awareness +  # Caught all high-severity = 1.00
     0.20 * precision +           # 0 false positives = 1.00
-    0.10 * explanation_quality + # Clear descriptions = 0.85
-    0.10 * decision_correctness  # Correct decision = 1.00
+    0.05 * explanation_quality + # Clear descriptions = 0.85
+    0.15 * decision_correctness  # Correct decision = 1.00
 )
-# = 0.40*0.75 + 0.20*1.00 + 0.20*1.00 + 0.10*0.85 + 0.10*1.00
-# = 0.30 + 0.20 + 0.20 + 0.085 + 0.10 = 0.885
+# = 0.40*0.75 + 0.20*1.00 + 0.20*1.00 + 0.05*0.85 + 0.15*1.00
+# = 0.30 + 0.20 + 0.20 + 0.0425 + 0.15 = 0.8925
 ```
 
 Final score clamped to (0.01, 0.99) for validator compliance.
@@ -292,7 +292,7 @@ If you use this environment in research, please cite:
 @software{ai_code_reviewer_2024,
   title={AI Code Reviewer: A Multi-Dimensional OpenEnv Environment for Pull Request Evaluation},
   author={Mohith},
-  year={2024},
+  year={2026},
   url={https://huggingface.co/spaces/Mohiee661/ai-code-reviewer}
 }
 ```

@@ -79,21 +79,173 @@ def parse_issues(raw: List[Any]) -> List[Issue]:
 @app.get("/", response_class=HTMLResponse)
 def root():
     return """
-    <html><head><title>AI Code Reviewer</title></head>
-    <body style="font-family:sans-serif;max-width:640px;margin:40px auto;padding:20px">
-    <h1>🤖 AI Code Reviewer <small style="font-size:0.5em;color:#888">v2.0</small></h1>
-    <p>OpenEnv environment — multi-step, persona-aware, severity-weighted.</p>
-    <table border="1" cellpadding="6" cellspacing="0" style="border-collapse:collapse;width:100%">
-      <tr><th>Method</th><th>Path</th><th>Description</th></tr>
-      <tr><td>POST</td><td>/reset</td><td>Start episode. Optional: <code>{"task_id":"easy"}</code></td></tr>
-      <tr><td>POST</td><td>/step</td><td>Phase 1: issues · Phase 2: final_decision</td></tr>
-      <tr><td>GET</td><td>/state</td><td>Current task &amp; phase</td></tr>
-      <tr><td>GET</td><td>/metrics</td><td>Last episode precision/recall</td></tr>
-      <tr><td>GET</td><td>/health</td><td>Liveness check</td></tr>
-      <tr><td>GET</td><td>/docs</td><td>Swagger UI</td></tr>
-    </table>
-    <br><a href="/docs"><button style="padding:10px 20px;font-size:16px;cursor:pointer">Open API Docs →</button></a>
-    </body></html>
+    <!doctype html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1" />
+      <title>AI Code Reviewer</title>
+      <style>
+        :root { --ink:#121212; --muted:#5b616e; --line:#d6d9df; --panel:#f7f8fa; --accent:#0b6bcb; --good:#13795b; --warn:#9a3412; }
+        * { box-sizing: border-box; }
+        body { margin:0; color:var(--ink); font-family:Arial, Helvetica, sans-serif; background:#fff; }
+        main { max-width:1120px; margin:0 auto; padding:28px 18px 48px; }
+        header { border-bottom:1px solid var(--line); padding-bottom:18px; margin-bottom:20px; }
+        h1 { font-size:32px; line-height:1.1; margin:0 0 8px; }
+        h2 { font-size:18px; margin:0 0 10px; }
+        p { line-height:1.55; margin:0 0 12px; }
+        .sub { color:var(--muted); max-width:780px; }
+        .grid { display:grid; grid-template-columns:minmax(0,1fr) 380px; gap:18px; align-items:start; }
+        .band { background:var(--panel); border:1px solid var(--line); border-radius:8px; padding:16px; margin-bottom:16px; }
+        .controls { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+        select, button, textarea { font:inherit; border-radius:8px; }
+        select, textarea { border:1px solid var(--line); background:#fff; }
+        select { padding:9px 10px; min-width:160px; }
+        button { border:1px solid #0b5cad; background:var(--accent); color:#fff; padding:9px 12px; cursor:pointer; min-height:40px; }
+        button.secondary { color:var(--accent); background:#fff; }
+        textarea { width:100%; min-height:220px; padding:12px; resize:vertical; font-family:Consolas, "Courier New", monospace; font-size:13px; line-height:1.45; }
+        pre { white-space:pre-wrap; overflow-wrap:anywhere; margin:0; padding:12px; background:#101820; color:#edf2f7; border-radius:8px; font-family:Consolas, "Courier New", monospace; font-size:13px; line-height:1.45; }
+        .meta { display:grid; grid-template-columns:repeat(3, minmax(0, 1fr)); gap:10px; }
+        .pill { border:1px solid var(--line); border-radius:8px; padding:10px; background:#fff; min-height:68px; }
+        .pill b { display:block; margin-bottom:6px; }
+        .score { font-size:34px; font-weight:700; color:var(--good); }
+        .small { font-size:13px; color:var(--muted); }
+        .links a { color:var(--accent); margin-right:12px; }
+        .status { color:var(--warn); min-height:20px; }
+        @media (max-width:860px) { .grid, .meta { grid-template-columns:1fr; } h1 { font-size:26px; } }
+      </style>
+    </head>
+    <body>
+      <main>
+        <header>
+          <h1>AI Code Reviewer OpenEnv</h1>
+          <p class="sub">Evaluate agents on realistic pull request review: issue recall, severity awareness, precision, explanation quality, and approve/request-changes judgment.</p>
+          <p class="links"><a href="/docs">API docs</a><a href="/health">Health</a><a href="/metrics">Last metrics</a></p>
+        </header>
+
+        <section class="band">
+          <div class="controls">
+            <label for="task"><b>Task</b></label>
+            <select id="task">
+              <option value="easy">easy</option>
+              <option value="medium">medium</option>
+              <option value="hard">hard</option>
+              <option value="expert">expert</option>
+            </select>
+            <button onclick="resetTask()">Load PR</button>
+            <button class="secondary" onclick="loadSample()">Use strong sample answer</button>
+          </div>
+          <p id="status" class="status"></p>
+        </section>
+
+        <section class="meta" id="metadata"></section>
+
+        <section class="grid">
+          <div>
+            <section class="band">
+              <h2>Pull Request</h2>
+              <pre id="diff">Choose a task and load the PR.</pre>
+            </section>
+          </div>
+          <aside>
+            <section class="band">
+              <h2>Submit Issues</h2>
+              <textarea id="issues">{"issues":[]}</textarea>
+              <div class="controls"><button onclick="submitIssues()">Submit issues</button></div>
+            </section>
+            <section class="band">
+              <h2>Final Decision</h2>
+              <div class="controls">
+                <select id="decision">
+                  <option value="request_changes">request_changes</option>
+                  <option value="approve">approve</option>
+                </select>
+                <button onclick="submitDecision()">Score review</button>
+              </div>
+            </section>
+            <section class="band">
+              <h2>Reward</h2>
+              <div class="score" id="score">--</div>
+              <p id="feedback" class="small">Submit issues and a final decision to see the reward breakdown.</p>
+            </section>
+          </aside>
+        </section>
+      </main>
+
+      <script>
+        const samples = {
+          easy: {issues: [
+            {file:"utils/list_helpers.py", line:4, type:"logic", severity:"medium", description:"Off-by-one slice starts at len(items)-n-1, returning one extra item before the requested last n elements. Use len(items)-n."},
+            {file:"utils/list_helpers.py", line:9, type:"logic", severity:"medium", description:"Loop extends to len(items)+1, creating an extra empty chunk at the end. Use range(0, len(items), size)."}
+          ]},
+          medium: {issues: [
+            {file:"api/users.py", line:9, type:"performance", severity:"high", description:"Loads all users and filters active users in Python, causing unnecessary full table scans. Filter in the database with User.query.filter_by(active=True)."},
+            {file:"api/users.py", line:15, type:"performance", severity:"high", description:"Loads the whole users table to find one primary-key record. Use get_or_404(user_id) or a filtered indexed query."},
+            {file:"api/users.py", line:21, type:"code_quality", severity:"medium", description:"Export endpoint returns an unbounded user list with no pagination or access control, creating data exposure and DoS risk."}
+          ]},
+          hard: {issues: [
+            {file:"auth/login.py", line:11, type:"security", severity:"high", description:"SQL injection: username and password are interpolated directly into a SQL f-string. Use parameterized queries."},
+            {file:"auth/config.py", line:7, type:"security", severity:"high", description:"Hardcoded JWT secret fallback allows token forgery when JWT_SECRET is unset. Require the env var instead of defaulting to a known secret."},
+            {file:"auth/login.py", line:4, type:"security", severity:"medium", description:"SECRET_KEY is imported at module load time, silently propagating the insecure fallback from config.py into token signing."}
+          ]},
+          expert: {issues: [
+            {file:"db/queries.py", line:9, type:"security", severity:"high", description:"SQL injection: user_id is interpolated directly into the orders query. Use a parameterized query."},
+            {file:"db/queries.py", line:15, type:"security", severity:"high", description:"SQL injection: product name is inserted directly into a quoted SQL string. Parameterize the name value."},
+            {file:"api/routes.py", line:7, type:"security", severity:"medium", description:"Removed int validation for user_id, allowing raw query input to reach the vulnerable SQL layer."}
+          ]}
+        };
+        async function postJson(path, body) {
+          const res = await fetch(path, {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)});
+          const data = await res.json();
+          if (!res.ok || data.success === false) throw new Error(JSON.stringify(data.detail || data.error || data));
+          return data.data || data;
+        }
+        function setStatus(text) { document.getElementById("status").textContent = text; }
+        function loadSample() {
+          const task = document.getElementById("task").value;
+          document.getElementById("issues").value = JSON.stringify(samples[task], null, 2);
+          document.getElementById("decision").value = "request_changes";
+        }
+        async function resetTask() {
+          try {
+            setStatus("Loading task...");
+            const task = document.getElementById("task").value;
+            const obs = await postJson("/reset", {task_id: task});
+            const meta = obs.pr_metadata || {};
+            document.getElementById("metadata").innerHTML =
+              `<div class="pill"><b>Title</b>${meta.title || task}</div>` +
+              `<div class="pill"><b>Author intent</b>${meta.author_intent || "Review the diff."}</div>` +
+              `<div class="pill"><b>Reviewer</b>${obs.persona || "Senior reviewer"}</div>`;
+            document.getElementById("diff").textContent = obs.files.map(f => `### ${f.filename}\n${f.diff}`).join("\n\n");
+            document.getElementById("score").textContent = "--";
+            document.getElementById("feedback").textContent = "Submit issues and a final decision to see the reward breakdown.";
+            loadSample();
+            setStatus("Task loaded. Edit the JSON or submit the sample answer.");
+          } catch (err) { setStatus(err.message); }
+        }
+        async function submitIssues() {
+          try {
+            setStatus("Submitting issues...");
+            const payload = JSON.parse(document.getElementById("issues").value);
+            const result = await postJson("/step", payload);
+            document.getElementById("feedback").textContent = result.reward.feedback;
+            setStatus("Issues accepted. Submit the final decision next.");
+          } catch (err) { setStatus(err.message); }
+        }
+        async function submitDecision() {
+          try {
+            setStatus("Scoring...");
+            const final_decision = document.getElementById("decision").value;
+            const result = await postJson("/step", {final_decision});
+            document.getElementById("score").textContent = result.reward.score.toFixed(2);
+            document.getElementById("feedback").textContent = result.reward.feedback;
+            setStatus("Review scored.");
+          } catch (err) { setStatus(err.message); }
+        }
+        resetTask();
+      </script>
+    </body>
+    </html>
     """
 
 
